@@ -479,3 +479,116 @@ func ai_act(p: Pl, delta: float) -> void:
 			pressed = true
 	if pressed and randf() < delta * 2.0:
 		do_pass(p, Vector3(s, 0, 0))
+func update_player(p: Pl, delta: float) -> void:
+	p.cd = maxf(0.0, p.cd - delta)
+	if carrier == p:
+		p.hold_t += delta
+	var pos: Vector3 = p.node.position
+	var dir := Vector3.ZERO
+	var spd := 5.5
+	if p == ctrl:
+		dir = Vector3(js_vec.x, 0, js_vec.y)
+		spd = 7.0
+	else:
+		dir = ai_move(p)
+	if carrier == p and p != ctrl:
+		if p.hold_t > 0.6:
+			ai_act(p, delta)
+	if p.cd > 0.0 and carrier != p:
+		spd *= 0.5
+	if carrier == p:
+		spd *= 0.9
+	if p.dash_t > 0.0:
+		p.dash_t -= delta
+		dir = p.dash_dir
+		spd = 14.0
+		if carrier == p:
+			for o in players:
+				if o.team != p.team and o.cd <= 0.0:
+					var v: Vector3 = o.node.position - pos
+					if v.length() < 2.0 and v.length() > 0.01:
+						var ang: float = rad_to_deg(v.angle_to(p.dash_dir))
+						if ang > 40.0:
+							o.cd = 1.4   # gecildi
+						else:
+							o.cd = 1.0
+							if randf() < 0.6:
+								take_ball(o)
+								break
+	if dir.length() > 0.05:
+		var nd: Vector3 = dir.normalized()
+		p.face = p.face.lerp(nd, minf(1.0, delta * 10.0))
+		if p.face.length() < 0.1:
+			p.face = nd
+		p.face = p.face.normalized()
+		pos += dir.limit_length(1.0) * spd * delta
+	pos.x = clampf(pos.x, -FL / 2.0 + 0.5, FL / 2.0 - 0.5)
+	pos.z = clampf(pos.z, -FW / 2.0 + 0.5, FW / 2.0 - 0.5)
+	p.node.position = pos
+	# top kapma (kosarak)
+	if carrier != null and carrier.team != p.team and p.cd <= 0.0 and p.idx != 0:
+		if pos.distance_to(carrier.node.position) < 1.4 and carrier.dash_t <= 0.0:
+			p.tackle_t -= delta
+			if p.tackle_t <= 0.0:
+				p.tackle_t = 0.5
+				if randf() < 0.4:
+					take_ball(p)
+
+
+func take_ball(p: Pl) -> void:
+	if carrier != null and carrier != p:
+		carrier.cd = 0.8
+	carrier = p
+	p.hold_t = 0.0
+	ball_vel = Vector3.ZERO
+
+
+func release(p: Pl) -> void:
+	carrier = null
+	p.cd = 0.35
+	p.hold_t = 0.0
+
+
+func do_shoot(p: Pl, aim: float, ai: bool) -> void:
+	if carrier != p:
+		return
+	var gx: float = FL / 2.0 if p.team == 0 else -FL / 2.0
+	var tz: float = aim * GW / 2.0 * 0.85
+	if ai:
+		tz = randf_range(-GW / 2.0 * 0.8, GW / 2.0 * 0.8)
+	var d: Vector3 = Vector3(gx, 0, tz) - p.node.position
+	d.y = 0
+	var dist: float = d.length()
+	ball_vel = d.normalized() * 24.0 + Vector3(randf_range(-1, 1), 0, randf_range(-1.5, 1.5)) * (0.5 + dist * 0.05)
+	release(p)
+
+
+func do_pass(p: Pl, dirv: Vector3) -> void:
+	if carrier != p:
+		return
+	var pos: Vector3 = p.node.position
+	var dn: Vector3 = dirv
+	if dn.length() < 0.1:
+		dn = Vector3(1.0 if p.team == 0 else -1.0, 0, 0)
+	dn = dn.normalized()
+	var best: Pl = null
+	var bs: float = -1e9
+	for m in players:
+		if m.team == p.team and m != p:
+			var v: Vector3 = m.node.position - pos
+			var dist: float = v.length()
+			if dist < 4.0 or dist > 45.0:
+				continue
+			var sc: float = v.normalized().dot(dn) * 10.0 - dist * 0.12
+			for o in players:
+				if o.team != p.team and o.node.position.distance_to(m.node.position) < 3.0:
+					sc -= 3.0
+			if sc > bs:
+				bs = sc
+				best = m
+	if best == null:
+		return
+	var v2: Vector3 = best.node.position - pos
+	v2.y = 0
+	ball_vel = v2.normalized() * clampf(8.0 + v2.length() * 0.36, 10.0, 30.0)
+	release(p)
