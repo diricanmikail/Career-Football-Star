@@ -592,3 +592,134 @@ func do_pass(p: Pl, dirv: Vector3) -> void:
 	v2.y = 0
 	ball_vel = v2.normalized() * clampf(8.0 + v2.length() * 0.36, 10.0, 30.0)
 	release(p)
+func update_ball(delta: float) -> void:
+	if carrier != null:
+		ball.position = carrier.node.position + carrier.face * 0.9 + Vector3(0, 0.3, 0)
+		ball_vel = Vector3.ZERO
+		return
+	var bp: Vector3 = ball.position + ball_vel * delta
+	ball_vel *= pow(0.7, delta)
+	if ball_vel.length() < 0.15:
+		ball_vel = Vector3.ZERO
+	if absf(bp.z) > FW / 2.0:
+		bp.z = signf(bp.z) * FW / 2.0
+		ball_vel.z *= -0.6
+	if absf(bp.x) > FL / 2.0:
+		if absf(bp.z) < GW / 2.0:
+			goal(0 if bp.x > 0.0 else 1)
+			return
+		bp.x = signf(bp.x) * FL / 2.0
+		ball_vel.x *= -0.6
+	ball.position = Vector3(bp.x, 0.3, bp.z)
+
+
+func check_possession() -> void:
+	if carrier != null:
+		return
+	var flat := Vector3(ball.position.x, 0, ball.position.z)
+	var best: Pl = null
+	var bd: float = 1e9
+	for p in players:
+		if p.cd > 0.0:
+			continue
+		var reach: float = 2.2 if p.idx == 0 else 1.2
+		var d: float = p.node.position.distance_to(flat)
+		if d < reach and d < bd:
+			bd = d
+			best = p
+	if best == null:
+		return
+	if best.idx == 0 and ball_vel.length() > 14.0 and randf() > 0.55:
+		best.cd = 0.6   # kaleci kurtaramadi
+		return
+	take_ball(best)
+
+
+func goal(scorer: int) -> void:
+	score[scorer] += 1
+	carrier = null
+	conceded = 1 - scorer
+	state = "goal"
+	pause_t = 2.5
+	lbl_msg.text = "GOOOL! " + TEAMS[team_idx[scorer]]["name"]
+	lbl_msg.show()
+
+
+# ---------------------------------------------------------------- kontrol
+func _input(e: InputEvent) -> void:
+	if state != "play" and state != "goal":
+		return
+	if e is InputEventScreenTouch:
+		var t := e as InputEventScreenTouch
+		if t.pressed:
+			var hit := ""
+			for k in btn_rects:
+				if btn_rects[k].has_point(t.position):
+					hit = k
+			if hit != "":
+				press(hit)
+			elif t.position.x < get_viewport().get_visible_rect().size.x * 0.5 and js_id == -1:
+				js_id = t.index
+				js_origin = t.position
+				js_vec = Vector2.ZERO
+				joy_base.position = t.position - Vector2(80, 80)
+				joy_knob.position = t.position - Vector2(35, 35)
+				joy_base.show()
+				joy_knob.show()
+		elif t.index == js_id:
+			js_id = -1
+			js_vec = Vector2.ZERO
+			joy_base.hide()
+			joy_knob.hide()
+	elif e is InputEventScreenDrag:
+		var dr := e as InputEventScreenDrag
+		if dr.index == js_id:
+			js_vec = ((dr.position - js_origin) / 80.0).limit_length(1.0)
+			joy_knob.position = js_origin + js_vec * 80.0 - Vector2(35, 35)
+
+
+func press(key: String) -> void:
+	if state != "play":
+		return
+	match key:
+		"far":
+			cam_h = minf(60.0, cam_h + 6.0)
+		"near":
+			cam_h = maxf(14.0, cam_h - 6.0)
+		"shoot":
+			if ctrl != null and carrier == ctrl:
+				var aim: float = js_vec.y if js_vec.length() > 0.2 else randf_range(-0.6, 0.6)
+				do_shoot(ctrl, aim, false)
+		"pass":
+			if ctrl != null and carrier == ctrl:
+				do_pass(ctrl, Vector3(js_vec.x, 0, js_vec.y))
+		"dribble":
+			if ctrl != null and carrier == ctrl and dribble_cd <= 0.0:
+				var near := false
+				for o in players:
+					if o.team == 1 and o.node.position.distance_to(ctrl.node.position) < 9.0:
+						near = true
+				if near:
+					var d := Vector3(js_vec.x, 0, js_vec.y)
+					if d.length() < 0.2:
+						d = ctrl.face
+					ctrl.dash_dir = d.normalized()
+					ctrl.dash_t = 0.45
+					dribble_cd = 2.5
+
+
+func update_hud() -> void:
+	var a: String = TEAMS[team_idx[0]]["name"].substr(0, 3).to_upper()
+	var b: String = TEAMS[team_idx[1]]["name"].substr(0, 3).to_upper()
+	var tl: int = int(time_left)
+	lbl_score.text = "%s %d - %d %s   %d:%02d" % [a, score[0], score[1], b, tl / 60, tl % 60]
+	if ctrl != null:
+		marker.show()
+		marker.position = ctrl.node.position + Vector3(0, 3.5, 0)
+
+
+func update_cam(delta: float) -> void:
+	var f := Vector3(clampf(ball.position.x, -FL / 2.0 + 8.0, FL / 2.0 - 8.0), 0, ball.position.z * 0.4)
+	var target: Vector3 = f + Vector3(0, cam_h, cam_h * 0.75)
+	cam.position = cam.position.lerp(target, minf(1.0, delta * 4.0))
+	cam.look_at(f)
