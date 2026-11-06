@@ -296,3 +296,186 @@ func show_menu() -> void:
 	marker.hide()
 	refresh_menu()
 
+
+# ---------------------------------------------------------------- mac
+func make_player(t: int, i: int) -> Pl:
+	var p := Pl.new()
+	p.team = t
+	p.idx = i
+	p.face = Vector3.RIGHT if t == 0 else Vector3.LEFT
+	var td: Dictionary = TEAMS[team_idx[t]]
+	var kit: Color = td["color"]
+	if i == 0:
+		kit = Color(0.1, 0.7, 0.25)
+	var n := Node3D.new()
+	n.add_child(box(Vector3(0.9, 0.9, 0.55), Vector3(0, 1.15, 0), kit))
+	n.add_child(box(Vector3(0.5, 0.5, 0.5), Vector3(0, 1.85, 0), Color(0.9, 0.72, 0.55)))
+	n.add_child(box(Vector3(0.7, 0.7, 0.45), Vector3(0, 0.35, 0), Color(0.95, 0.95, 0.95)))
+	var l := Label3D.new()
+	l.text = td["names"][i]
+	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	l.pixel_size = 0.012
+	l.font_size = 42
+	l.outline_size = 12
+	l.no_depth_test = true
+	l.position = Vector3(0, 2.7, 0)
+	n.add_child(l)
+	add_child(n)
+	p.node = n
+	return p
+
+
+func start_match() -> void:
+	menu.hide()
+	for c in play_ui:
+		c.show()
+	var opp: int = (sel_team + 1 + randi() % (TEAMS.size() - 1)) % TEAMS.size()
+	team_idx = [sel_team, opp]
+	score = [0, 0]
+	time_left = MATCH_TIME
+	apply_env()
+	for p in players:
+		p.node.queue_free()
+	players.clear()
+	for t in range(2):
+		for i in range(11):
+			players.append(make_player(t, i))
+	reset_kickoff(0)
+	state = "play"
+
+
+func end_match() -> void:
+	var a: int = score[0]
+	var b: int = score[1]
+	menu_title.text = "MAÇ BİTTİ  %d - %d" % [a, b]
+	show_menu()
+
+
+func reset_kickoff(t: int) -> void:
+	att = [0.0, 0.0]
+	ball.position = Vector3(0, 0.3, 0)
+	ball_vel = Vector3.ZERO
+	carrier = null
+	for p in players:
+		p.cd = 0.0
+		p.dash_t = 0.0
+		p.hold_t = 0.0
+		p.node.position = form_pos(p)
+	for p in players:
+		if p.team == t and p.idx == 9:
+			p.node.position = Vector3(0, 0, 0)
+			carrier = p
+	lbl_msg.hide()
+
+
+func form_pos(p: Pl) -> Vector3:
+	var s: float = 1.0 if p.team == 0 else -1.0
+	if p.idx == 0:
+		var gz: float = clampf(ball.position.z * 0.3, -GW / 2.0, GW / 2.0)
+		return Vector3(s * (-FL / 2.0 + 2.0), 0, gz)
+	var a: float = att[p.team]
+	var fd: Vector2 = F_DEF[p.idx]
+	var fa: Vector2 = F_ATT[p.idx]
+	var f: Vector2 = fd.lerp(fa, a)
+	var x: float = s * (-FL / 2.0 + f.x * FL) + ball.position.x * 0.15
+	var z: float = f.y * FW / 2.0 * 0.9 + ball.position.z * 0.25
+	return Vector3(clampf(x, -FL / 2.0 + 3.0, FL / 2.0 - 3.0), 0, clampf(z, -FW / 2.0 + 2.0, FW / 2.0 - 2.0))
+
+
+func _physics_process(delta: float) -> void:
+	if state == "goal":
+		pause_t -= delta
+		if pause_t <= 0.0:
+			state = "play"
+			reset_kickoff(conceded)
+		update_cam(delta)
+		return
+	if state != "play":
+		return
+	time_left -= delta
+	if time_left <= 0.0:
+		end_match()
+		return
+	dribble_cd = maxf(0.0, dribble_cd - delta)
+	for t in range(2):
+		var target: float = 1.0 if (carrier != null and carrier.team == t) else 0.0
+		att[t] = move_toward(att[t], target, delta * 0.8)
+	pick_chasers()
+	pick_ctrl()
+	for p in players:
+		if state != "play":
+			break
+		update_player(p, delta)
+	if state == "play":
+		update_ball(delta)
+		check_possession()
+	update_hud()
+	update_cam(delta)
+
+
+func pick_chasers() -> void:
+	for t in range(2):
+		var best: Pl = null
+		var bd: float = 1e9
+		for p in players:
+			if p.team == t and p.idx != 0:
+				var d: float = p.node.position.distance_to(ball.position)
+				if d < bd:
+					bd = d
+					best = p
+		chasers[t] = best
+
+
+func pick_ctrl() -> void:
+	if carrier != null and carrier.team == 0:
+		ctrl = carrier
+	else:
+		ctrl = chasers[0]
+
+
+func arrive(pos: Vector3, target: Vector3) -> Vector3:
+	var v: Vector3 = target - pos
+	v.y = 0
+	var d: float = v.length()
+	if d < 0.6:
+		return Vector3.ZERO
+	return v / d * minf(1.0, d / 3.0)
+
+
+func ai_move(p: Pl) -> Vector3:
+	var pos: Vector3 = p.node.position
+	if carrier == p:
+		if p.idx == 0:
+			return Vector3.ZERO
+		var gx: float = FL / 2.0 if p.team == 0 else -FL / 2.0
+		var d := Vector3(gx - pos.x, 0, -pos.z * 0.5)
+		for o in players:
+			if o.team != p.team:
+				var v: Vector3 = o.node.position - pos
+				if v.length() < 5.0 and v.dot(d) > 0.0:
+					var side: float = -1.0 if v.z > 0.0 else 1.0
+					d += Vector3(0, 0, side * 1.2)
+		return d.normalized()
+	var target: Vector3 = form_pos(p)
+	if p.idx != 0 and chasers[p.team] == p and (carrier == null or carrier.team != p.team):
+		target = ball.position if carrier == null else carrier.node.position
+	return arrive(pos, target)
+
+
+func ai_act(p: Pl, delta: float) -> void:
+	var s: float = 1.0 if p.team == 0 else -1.0
+	var pos: Vector3 = p.node.position
+	if p.idx == 0:
+		if p.hold_t > 1.0:
+			do_pass(p, Vector3(s, 0, 0))
+		return
+	var dgoal: float = absf(s * FL / 2.0 - pos.x)
+	if dgoal < 22.0 and randf() < delta * 2.5:
+		do_shoot(p, 0.0, true)
+		return
+	var pressed := false
+	for o in players:
+		if o.team != p.team and o.node.position.distance_to(pos) < 3.0:
+			pressed = true
+	if pressed and randf() < delta * 2.0:
+		do_pass(p, Vector3(s, 0, 0))
