@@ -1,0 +1,27 @@
+name: Android APK
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Hazirlik
+        run: |
+          mkdir -v -p ~/.local/share/godot/export_templates/
+          mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android -keystore debug.keystore -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
+          mv debug.keystore /root/debug.keystore
+      - name: APK derle
+        run: |
+          mkdir -v -p build/android
+          godot --headless --import || true
+          godot --headless --export-debug "Android" build/android/mini-futbol.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mini-futbol-apk
+          path: build/android
